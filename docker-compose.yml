@@ -39,7 +39,7 @@ services:
 
   backend:
     build:
-      context: ./
+      context: .
       dockerfile: Dockerfile
     container_name: iscan_backend
     ports:
@@ -56,11 +56,10 @@ services:
     restart: unless-stopped
     networks:
       - iscan_network
-    # Uses the default CMD from Dockerfile (./start.sh)
 
   celery:
     build:
-      context: ./
+      context: .
       dockerfile: Dockerfile
     container_name: iscan_celery
     env_file:
@@ -75,31 +74,10 @@ services:
     restart: unless-stopped
     networks:
       - iscan_network
-    # Override the default command to run celery worker
     command: >
       sh -c "python wait-for-db.py && 
              python test_imports.py && 
              celery -A app.celery_app worker --loglevel=info --concurrency=2"
-
-  celery-beat:
-    build:
-      context: ./
-      dockerfile: Dockerfile
-    container_name: iscan_celery_beat
-    env_file:
-      - .env
-    depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-    restart: unless-stopped
-    networks:
-      - iscan_network
-    # Override the default command to run celery beat
-    command: >
-      sh -c "python wait-for-db.py && 
-             celery -A app.celery_app beat --loglevel=info"
 
 volumes:
   postgres_data:
@@ -107,5 +85,4 @@ volumes:
 
 networks:
   iscan_network:
-    name: iscan_shared_network
     driver: bridge

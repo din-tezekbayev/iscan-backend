@@ -1,0 +1,159 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:15
+    container_name: iscan_postgres
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./backups:/backups
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - iscan_network
+
+  redis:
+    image: redis:7-alpine
+    container_name: iscan_redis
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    volumes:
+      - redis_data:/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+    networks:
+      - iscan_network
+
+  backend:
+    build:
+      context: ./iscan-backend
+      dockerfile: Dockerfile
+    container_name: iscan_backend
+    ports:
+      - "${BACKEND_PORT:-8000}:8000"
+    env_file:
+      - .env
+    environment:
+      # Explicitly pass critical environment variables
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - DATABASE_URL=${DATABASE_URL}
+      - REDIS_URL=${REDIS_URL}
+      - FTP_HOST=${FTP_HOST}
+      - FTP_USER=${FTP_USER}
+      - FTP_PASSWORD=${FTP_PASSWORD}
+      - FTP_BASE_PATH=${FTP_BASE_PATH}
+      - FTP_FILES_PATH=${FTP_FILES_PATH}
+      - FTP_CSV_PATH=${FTP_CSV_PATH}
+      - PYTHONPATH=/app
+      - PYTHONUNBUFFERED=1
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    networks:
+      - iscan_network
+    command: >
+      sh -c "python wait-for-db.py && 
+             python test_imports.py && 
+             python test_ftp.py && 
+             python init_db.py && 
+             uvicorn app.main:app --host 0.0.0.0 --port 8000"
+
+  celery:
+    build:
+      context: ./iscan-backend
+      dockerfile: Dockerfile
+    container_name: iscan_celery
+    env_file:
+      - .env
+    environment:
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - DATABASE_URL=${DATABASE_URL}
+      - REDIS_URL=${REDIS_URL}
+      - CELERY_BROKER_URL=${CELERY_BROKER_URL}
+      - CELERY_RESULT_BACKEND=${CELERY_RESULT_BACKEND}
+      - FTP_HOST=${FTP_HOST}
+      - FTP_USER=${FTP_USER}
+      - FTP_PASSWORD=${FTP_PASSWORD}
+      - FTP_BASE_PATH=${FTP_BASE_PATH}
+      - FTP_FILES_PATH=${FTP_FILES_PATH}
+      - FTP_CSV_PATH=${FTP_CSV_PATH}
+      - PYTHONPATH=/app
+      - PYTHONUNBUFFERED=1
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      backend:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - iscan_network
+    command: >
+      sh -c "python wait-for-db.py && 
+             python test_imports.py && 
+             celery -A app.celery_app worker --loglevel=info --concurrency=2"
+
+  celery-beat:
+    build:
+      context: ./iscan-backend
+      dockerfile: Dockerfile
+    container_name: iscan_celery_beat
+    env_file:
+      - .env
+    environment:
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - DATABASE_URL=${DATABASE_URL}
+      - REDIS_URL=${REDIS_URL}
+      - CELERY_BROKER_URL=${CELERY_BROKER_URL}
+      - CELERY_RESULT_BACKEND=${CELERY_RESULT_BACKEND}
+      - FTP_HOST=${FTP_HOST}
+      - FTP_USER=${FTP_USER}
+      - FTP_PASSWORD=${FTP_PASSWORD}
+      - FTP_BASE_PATH=${FTP_BASE_PATH}
+      - FTP_FILES_PATH=${FTP_FILES_PATH}
+      - FTP_CSV_PATH=${FTP_CSV_CSV_PATH}
+      - PYTHONPATH=/app
+      - PYTHONUNBUFFERED=1
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - iscan_network
+    command: >
+      sh -c "python wait-for-db.py && 
+             celery -A app.celery_app beat --loglevel=info"
+
+volumes:
+  postgres_data:
+  redis_data:
+
+networks:
+  iscan_network:
+    name: iscan_shared_network
+    driver: bridge

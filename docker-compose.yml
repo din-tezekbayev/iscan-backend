@@ -5,17 +5,16 @@ services:
     image: postgres:15
     container_name: iscan_postgres
     environment:
-      POSTGRES_DB: ${POSTGRES_DB}
-      POSTGRES_USER: ${POSTGRES_USER}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB:-iscan_db}
+      POSTGRES_USER: ${POSTGRES_USER:-iscan_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-iscan_password}
     ports:
-      - "${POSTGRES_PORT:-5432}:5432"
+      - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
-      - ./backups:/backups
     restart: unless-stopped
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-iscan_user} -d ${POSTGRES_DB:-iscan_db}"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -26,7 +25,7 @@ services:
     image: redis:7-alpine
     container_name: iscan_redis
     ports:
-      - "${REDIS_PORT:-6379}:6379"
+      - "6379:6379"
     volumes:
       - redis_data:/data
     restart: unless-stopped
@@ -44,41 +43,20 @@ services:
       dockerfile: Dockerfile
     container_name: iscan_backend
     ports:
-      - "${BACKEND_PORT:-8000}:8000"
+      - "8000:8000"
     env_file:
-      - .env
+      - ./iscan-backend/.env
     environment:
-      # Explicitly pass critical environment variables
-      - OPENAI_API_KEY=${OPENAI_API_KEY}
-      - DATABASE_URL=${DATABASE_URL}
-      - REDIS_URL=${REDIS_URL}
-      - FTP_HOST=${FTP_HOST}
-      - FTP_USER=${FTP_USER}
-      - FTP_PASSWORD=${FTP_PASSWORD}
-      - FTP_BASE_PATH=${FTP_BASE_PATH}
-      - FTP_FILES_PATH=${FTP_FILES_PATH}
-      - FTP_CSV_PATH=${FTP_CSV_PATH}
-      - PYTHONPATH=/app
-      - PYTHONUNBUFFERED=1
+      - DEBUG=false
     depends_on:
       postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
     restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
     networks:
       - iscan_network
-    command: >
-      sh -c "python wait-for-db.py && 
-             python test_imports.py && 
-             python test_ftp.py && 
-             python init_db.py && 
-             uvicorn app.main:app --host 0.0.0.0 --port 8000"
+    # Uses the default CMD from Dockerfile (./start.sh)
 
   celery:
     build:
@@ -86,21 +64,7 @@ services:
       dockerfile: Dockerfile
     container_name: iscan_celery
     env_file:
-      - .env
-    environment:
-      - OPENAI_API_KEY=${OPENAI_API_KEY}
-      - DATABASE_URL=${DATABASE_URL}
-      - REDIS_URL=${REDIS_URL}
-      - CELERY_BROKER_URL=${CELERY_BROKER_URL}
-      - CELERY_RESULT_BACKEND=${CELERY_RESULT_BACKEND}
-      - FTP_HOST=${FTP_HOST}
-      - FTP_USER=${FTP_USER}
-      - FTP_PASSWORD=${FTP_PASSWORD}
-      - FTP_BASE_PATH=${FTP_BASE_PATH}
-      - FTP_FILES_PATH=${FTP_FILES_PATH}
-      - FTP_CSV_PATH=${FTP_CSV_PATH}
-      - PYTHONPATH=/app
-      - PYTHONUNBUFFERED=1
+      - ./iscan-backend/.env
     depends_on:
       postgres:
         condition: service_healthy
@@ -111,6 +75,7 @@ services:
     restart: unless-stopped
     networks:
       - iscan_network
+    # Override the default command to run celery worker
     command: >
       sh -c "python wait-for-db.py && 
              python test_imports.py && 
@@ -122,21 +87,7 @@ services:
       dockerfile: Dockerfile
     container_name: iscan_celery_beat
     env_file:
-      - .env
-    environment:
-      - OPENAI_API_KEY=${OPENAI_API_KEY}
-      - DATABASE_URL=${DATABASE_URL}
-      - REDIS_URL=${REDIS_URL}
-      - CELERY_BROKER_URL=${CELERY_BROKER_URL}
-      - CELERY_RESULT_BACKEND=${CELERY_RESULT_BACKEND}
-      - FTP_HOST=${FTP_HOST}
-      - FTP_USER=${FTP_USER}
-      - FTP_PASSWORD=${FTP_PASSWORD}
-      - FTP_BASE_PATH=${FTP_BASE_PATH}
-      - FTP_FILES_PATH=${FTP_FILES_PATH}
-      - FTP_CSV_PATH=${FTP_CSV_CSV_PATH}
-      - PYTHONPATH=/app
-      - PYTHONUNBUFFERED=1
+      - ./iscan-backend/.env
     depends_on:
       postgres:
         condition: service_healthy
@@ -145,6 +96,7 @@ services:
     restart: unless-stopped
     networks:
       - iscan_network
+    # Override the default command to run celery beat
     command: >
       sh -c "python wait-for-db.py && 
              celery -A app.celery_app beat --loglevel=info"

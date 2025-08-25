@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   postgres:
     image: postgres:15
@@ -76,13 +74,4 @@ services:
       - iscan_network
     command: >
       sh -c "python wait-for-db.py && 
-             python test_imports.py && 
-             celery -A app.celery_app worker --loglevel=info --concurrency=2"
-
-volumes:
-  postgres_data:
-  redis_data:
-
-networks:
-  iscan_network:
-    driver: bridge
+             python test_import

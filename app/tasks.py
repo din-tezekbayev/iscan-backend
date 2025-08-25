@@ -11,11 +11,11 @@ logger = logging.getLogger(__name__)
 def get_processors():
     """Lazy load processors to avoid import issues on startup"""
     from app.process_services.invoice_processor import InvoiceProcessor
-    from app.process_services.contract_processor import ContractProcessor
+    from app.process_services.huawei_processor import HuaweiProcessor
 
     return {
         "invoice": InvoiceProcessor(),
-        "contract": ContractProcessor(),
+        "huawei": HuaweiProcessor(),
     }
 
 @celery_app.task(bind=True)
@@ -48,6 +48,8 @@ def process_document_task(self, file_id: int, file_type_id: int, batch_id: int =
         processors = get_processors()
         processor = processors.get(file_type.name.lower())
         prompts = file_type.processing_prompts
+        
+        logger.info(f"File type: {file_type.name}, Processor found: {type(processor).__name__ if processor else 'None'}")
 
         logger.info(f"File prompts: {prompts}")
         result = asyncio.run(process_document(file_content, prompts))

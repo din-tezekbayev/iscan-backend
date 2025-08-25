@@ -1,7 +1,7 @@
 import uuid
 import os
 from typing import List, Optional
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File as FastAPIFile
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File as FastAPIFile, Form
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
 
@@ -31,8 +31,8 @@ class FileUploadResponse(BaseModel):
 @router.post("/upload", response_model=FileUploadResponse)
 async def upload_file(
     file: UploadFile = FastAPIFile(...),
-    file_type_id: int = 1,
-    batch_id: Optional[int] = None,
+    file_type_id: int = Form(1),
+    batch_id: Optional[int] = Form(None),
     db: Session = Depends(get_db)
 ):
     if not file.filename.lower().endswith('.pdf'):

@@ -72,6 +72,12 @@ services:
     restart: unless-stopped
     networks:
       - iscan_network
-    command: >
-      sh -c "python wait-for-db.py && 
-             python test_import
+    command: ["sh", "-c", "python wait-for-db.py && python test_imports.py && celery -A app.celery_app worker --loglevel=info --concurrency=2"]
+
+volumes:
+  postgres_data:
+  redis_data:
+
+networks:
+  iscan_network:
+    driver: bridge

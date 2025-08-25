@@ -13,7 +13,8 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=[
         "http://localhost:3000",
-        "https://*.ristart.kz"
+        "https://scan.ristart.kz",
+        "https://scan-api.ristart.kz"
     ],
     allow_credentials=True,
     allow_methods=["*"],

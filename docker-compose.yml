@@ -39,7 +39,7 @@ services:
 
   backend:
     build:
-      context: ./iscan-backend
+      context: ./
       dockerfile: Dockerfile
     container_name: iscan_backend
     ports:
@@ -60,7 +60,7 @@ services:
 
   celery:
     build:
-      context: ./iscan-backend
+      context: ./
       dockerfile: Dockerfile
     container_name: iscan_celery
     env_file:
@@ -83,7 +83,7 @@ services:
 
   celery-beat:
     build:
-      context: ./iscan-backend
+      context: ./
       dockerfile: Dockerfile
     container_name: iscan_celery_beat
     env_file:

@@ -9,19 +9,19 @@ Base.metadata.create_all(bind=engine)
 
 app = FastAPI(title=settings.app_name)
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=[
-        "http://localhost:3000",
-        "https://scan.ristart.kz",
-        "https://scan-api.ristart.kz",
-        "http://localhost",
-        "http://127.0.0.1"
-    ],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+# app.add_middleware(
+#     CORSMiddleware,
+#     allow_origins=[
+#         "http://localhost:3000",
+#         "https://scan.ristart.kz",
+#         "https://scan-api.ristart.kz",
+#         "http://localhost",
+#         "http://127.0.0.1"
+#     ],
+#     allow_credentials=True,
+#     allow_methods=["*"],
+#     allow_headers=["*"],
+# )
 
 app.include_router(files.router, prefix="/api/v1/files", tags=["files"])
 app.include_router(file_types.router, prefix="/api/v1/file-types", tags=["file-types"])

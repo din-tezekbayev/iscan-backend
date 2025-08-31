@@ -17,7 +17,11 @@ python test_imports.py
 echo "Testing FTP connection..."
 python test_ftp.py || echo "Warning: FTP test failed, continuing..."
 
-# Initialize database
+# Run production migration first
+echo "Running database migration..."
+python production_migration.py || echo "Warning: Migration failed, continuing with init_db..."
+
+# Initialize database (will skip if already initialized)
 echo "Initializing database..."
 python init_db.py
 

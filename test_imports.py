@@ -27,7 +27,7 @@ def test_imports():
         
         print("5. Testing processor imports...")
         from app.process_services.invoice_processor import InvoiceProcessor
-        from app.process_services.contract_processor import ContractProcessor
+        from app.process_services.huawei_processor import HuaweiProcessor
         print("   ✓ Processor imports OK")
         
         print("6. Testing LangGraph imports...")

@@ -1,17 +1,24 @@
 from sqlalchemy.orm import Session
 from app.core.database import SessionLocal, engine
-from app.models import Base, FileType
+from app.models import Base, FileType, ProcessorType, ProcessingMode
 
 Base.metadata.create_all(bind=engine)
 
 def init_db():
     db: Session = SessionLocal()
     
-    # Check if file types already exist
-    existing_types = db.query(FileType).count()
-    if existing_types > 0:
-        print("Database already initialized")
-        return
+    try:
+        # Check if file types already exist
+        existing_types = db.query(FileType).count()
+        if existing_types > 0:
+            print("Database already initialized")
+            db.close()
+            return
+    except Exception as e:
+        print(f"Warning: Could not check existing file types: {e}")
+        print("Proceeding with database initialization...")
+        db.close()
+        db = SessionLocal()  # Create fresh session
     
     # Create default file types
     default_file_types = [

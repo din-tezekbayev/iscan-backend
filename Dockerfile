@@ -31,7 +31,8 @@ RUN chmod +x start.sh \
     && chmod +x wait-for-db.py \
     && chmod +x test_imports.py \
     && chmod +x test_ftp.py \
-    && chmod +x init_db.py
+    && chmod +x init_db.py \
+    && chmod +x production_migration.py
 
 # Create directories for uploads and logs
 RUN mkdir -p /app/uploads /app/logs

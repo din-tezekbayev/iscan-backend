@@ -16,6 +16,9 @@ class DocumentState(TypedDict):
     current_page: int
     total_pages: int
     error: str
+    processing_mode: str
+    verification_enabled: bool
+    extracted_text: str
 
 def pdf_to_images(pdf_content: bytes, max_pages: int = None) -> List[str]:
     """
@@ -54,6 +57,36 @@ def pdf_to_images(pdf_content: bytes, max_pages: int = None) -> List[str]:
         
     except Exception as e:
         raise Exception(f"Failed to convert PDF to images: {str(e)}")
+
+
+def pdf_to_text(pdf_content: bytes) -> str:
+    """
+    Extract text from PDF pages.
+    
+    Args:
+        pdf_content: PDF file content as bytes
+    
+    Returns:
+        String containing extracted text from all pages
+    """
+    try:
+        # Open PDF from bytes
+        pdf_document = fitz.open(stream=pdf_content, filetype="pdf")
+        text_content = []
+        
+        # Extract text from all pages
+        for page_num in range(pdf_document.page_count):
+            page = pdf_document.load_page(page_num)
+            page_text = page.get_text()
+            
+            if page_text.strip():  # Only add non-empty pages
+                text_content.append(f"--- Page {page_num + 1} ---\n{page_text}")
+        
+        pdf_document.close()
+        return "\n\n".join(text_content)
+        
+    except Exception as e:
+        raise Exception(f"Failed to extract text from PDF: {str(e)}")
 
 def parse_chatgpt_response(content: str) -> Dict[str, Any]:
     """Parse ChatGPT response and extract JSON data"""
@@ -210,11 +243,33 @@ def aggregate_page_results(page_results: List[Dict[str, Any]]) -> Dict[str, Any]
     
     return aggregated
 
-def process_pdf_node(state: DocumentState) -> DocumentState:
-    # Skip any extraction - just pass the PDF directly to ChatGPT
+def extract_content_node(state: DocumentState) -> DocumentState:
+    """Extract content from PDF based on processing mode"""
+    if state["error"]:
+        return state
+    
+    try:
+        processing_mode = state["file_type_prompts"].get("processing_mode", "IMAGE_OCR")
+        
+        if processing_mode == "TEXT_EXTRACTION":
+            # Extract text from PDF
+            extracted_text = pdf_to_text(state["file_content"])
+            state["extracted_text"] = extracted_text
+            state["processing_mode"] = "TEXT_EXTRACTION"
+        else:
+            # Default to IMAGE_OCR mode
+            state["processing_mode"] = "IMAGE_OCR"
+            state["extracted_text"] = ""
+            
+        state["verification_enabled"] = state["file_type_prompts"].get("verification_enabled", False)
+        
+    except Exception as e:
+        state["error"] = f"Content extraction failed: {str(e)}"
+    
     return state
 
 def process_with_chatgpt_node(state: DocumentState) -> DocumentState:
+    """Process document content with ChatGPT based on processing mode"""
     if state["error"]:
         return state
 
@@ -227,67 +282,95 @@ def process_with_chatgpt_node(state: DocumentState) -> DocumentState:
 
         system_prompt = state["file_type_prompts"].get("system_prompt", "")
         extraction_prompt = state["file_type_prompts"].get("extraction_prompt", "")
+        processing_mode = state.get("processing_mode", "IMAGE_OCR")
 
-        # Convert PDF to images (all pages)
-        try:
-            pdf_images = pdf_to_images(state["file_content"], max_pages=None)
-            
-            if not pdf_images:
-                raise Exception("No images generated from PDF")
-        except Exception as e:
-            state["error"] = f"PDF to image conversion failed: {str(e)}"
-            return state
-
-        state["total_pages"] = len(pdf_images)
-        state["page_results"] = []
-
-        # Process each page
-        for page_idx, image_base64 in enumerate(pdf_images):
-            state["current_page"] = page_idx + 1
-            
+        if processing_mode == "TEXT_EXTRACTION":
+            # Text-based processing
             try:
-                # Create message content with PNG image for this page
-                page_prompt = f"{extraction_prompt}\n\nPage {page_idx + 1} of {len(pdf_images)}. Extract information from this specific page."
-                message_content = [
-                    {"type": "text", "text": page_prompt}
-                ]
+                extracted_text = state.get("extracted_text", "")
+                if not extracted_text:
+                    raise Exception("No text extracted from PDF")
                 
-                # Add current page as image
-                message_content.append({
-                    "type": "image_url",
-                    "image_url": {
-                        "url": f"data:image/png;base64,{image_base64}"
-                    }
-                })
-
+                # Create message for text processing
                 messages = [
                     SystemMessage(content=system_prompt),
-                    HumanMessage(content=message_content)
+                    HumanMessage(content=f"{extraction_prompt}\n\nDocument text:\n{extracted_text}")
                 ]
 
                 response = llm.invoke(messages)
-                page_result = parse_chatgpt_response(response.content)
+                result = parse_chatgpt_response(response.content)
                 
-                # Add page metadata
-                page_result["page_number"] = page_idx + 1
-                page_result["page_processing_status"] = "success"
+                # Add processing metadata
+                result["processing_mode"] = "TEXT_EXTRACTION"
+                result["processing_status"] = "success"
                 
-                state["page_results"].append(page_result)
+                state["processing_result"] = result
                 
             except Exception as e:
-                # Log page processing error but continue with other pages
-                error_result = {
-                    "page_number": page_idx + 1,
-                    "page_processing_status": "failed",
-                    "error": str(e)
-                }
-                state["page_results"].append(error_result)
-
-        # Aggregate results from all pages
-        if state["page_results"]:
-            state["processing_result"] = aggregate_page_results(state["page_results"])
+                state["error"] = f"Text-based processing failed: {str(e)}"
+                
         else:
-            state["error"] = "No pages were successfully processed"
+            # Image-based processing (original method)
+            try:
+                pdf_images = pdf_to_images(state["file_content"], max_pages=None)
+                
+                if not pdf_images:
+                    raise Exception("No images generated from PDF")
+            except Exception as e:
+                state["error"] = f"PDF to image conversion failed: {str(e)}"
+                return state
+
+            state["total_pages"] = len(pdf_images)
+            state["page_results"] = []
+
+            # Process each page
+            for page_idx, image_base64 in enumerate(pdf_images):
+                state["current_page"] = page_idx + 1
+                
+                try:
+                    # Create message content with PNG image for this page
+                    page_prompt = f"{extraction_prompt}\n\nPage {page_idx + 1} of {len(pdf_images)}. Extract information from this specific page."
+                    message_content = [
+                        {"type": "text", "text": page_prompt}
+                    ]
+                    
+                    # Add current page as image
+                    message_content.append({
+                        "type": "image_url",
+                        "image_url": {
+                            "url": f"data:image/png;base64,{image_base64}"
+                        }
+                    })
+
+                    messages = [
+                        SystemMessage(content=system_prompt),
+                        HumanMessage(content=message_content)
+                    ]
+
+                    response = llm.invoke(messages)
+                    page_result = parse_chatgpt_response(response.content)
+                    
+                    # Add page metadata
+                    page_result["page_number"] = page_idx + 1
+                    page_result["page_processing_status"] = "success"
+                    
+                    state["page_results"].append(page_result)
+                    
+                except Exception as e:
+                    # Log page processing error but continue with other pages
+                    error_result = {
+                        "page_number": page_idx + 1,
+                        "page_processing_status": "failed",
+                        "error": str(e)
+                    }
+                    state["page_results"].append(error_result)
+
+            # Aggregate results from all pages
+            if state["page_results"]:
+                state["processing_result"] = aggregate_page_results(state["page_results"])
+                state["processing_result"]["processing_mode"] = "IMAGE_OCR"
+            else:
+                state["error"] = "No pages were successfully processed"
 
     except Exception as e:
         state["error"] = f"ChatGPT processing failed: {str(e)}"
@@ -295,6 +378,7 @@ def process_with_chatgpt_node(state: DocumentState) -> DocumentState:
     return state
 
 def validate_result_node(state: DocumentState) -> DocumentState:
+    """Validate extraction results and optionally verify numbers/symbols"""
     if state["error"]:
         return state
 
@@ -302,26 +386,85 @@ def validate_result_node(state: DocumentState) -> DocumentState:
         state["error"] = "No processing result generated"
         return state
 
+    # Standard required field validation
     required_fields = state["file_type_prompts"].get("required_fields", [])
+    validation_errors = []
 
     for field in required_fields:
         if field not in state["processing_result"]:
-            if "validation_errors" not in state["processing_result"]:
-                state["processing_result"]["validation_errors"] = []
-            state["processing_result"]["validation_errors"].append(f"Missing required field: {field}")
+            validation_errors.append(f"Missing required field: {field}")
+
+    # Enhanced verification if enabled
+    verification_enabled = state.get("verification_enabled", False)
+    if verification_enabled:
+        verification_errors = perform_verification(state["processing_result"])
+        validation_errors.extend(verification_errors)
+
+    if validation_errors:
+        state["processing_result"]["validation_errors"] = validation_errors
+    
+    # Add verification metadata
+    state["processing_result"]["verification_performed"] = verification_enabled
 
     return state
+
+
+def perform_verification(result: Dict[str, Any]) -> List[str]:
+    """Perform verification of numbers and symbols in extracted data"""
+    errors = []
+    
+    try:
+        # Verify numeric values in act items if present
+        if "act" in result and "items" in result["act"]:
+            items = result["act"]["items"]
+            if isinstance(items, list):
+                for i, item in enumerate(items):
+                    if isinstance(item, dict):
+                        # Check numeric fields
+                        numeric_fields = ["quantity", "unit_price", "total_cost"]
+                        for field in numeric_fields:
+                            if field in item:
+                                value = item[field]
+                                if not _is_valid_number(value):
+                                    errors.append(f"Item {i+1}: Invalid {field} value: {value}")
+        
+        # Verify totals if present
+        if "act" in result and "total" in result["act"]:
+            total = result["act"]["total"]
+            if isinstance(total, dict):
+                if "total_cost" in total and not _is_valid_number(total["total_cost"]):
+                    errors.append(f"Invalid total cost: {total['total_cost']}")
+                if "quantity" in total and not _is_valid_number(total["quantity"]):
+                    errors.append(f"Invalid total quantity: {total['quantity']}")
+                    
+    except Exception as e:
+        errors.append(f"Verification error: {str(e)}")
+    
+    return errors
+
+
+def _is_valid_number(value) -> bool:
+    """Check if a value is a valid number"""
+    try:
+        if isinstance(value, (int, float)):
+            return not (isinstance(value, float) and (value != value))  # Check for NaN
+        if isinstance(value, str):
+            float(value.replace(",", "."))  # Handle Russian decimal separator
+            return True
+        return False
+    except (ValueError, TypeError):
+        return False
 
 def create_document_processor():
     workflow = StateGraph(DocumentState)
 
-    workflow.add_node("process_pdf", process_pdf_node)
+    workflow.add_node("extract_content", extract_content_node)
     workflow.add_node("process_with_chatgpt", process_with_chatgpt_node)
     workflow.add_node("validate_result", validate_result_node)
 
-    workflow.set_entry_point("process_pdf")
+    workflow.set_entry_point("extract_content")
 
-    workflow.add_edge("process_pdf", "process_with_chatgpt")
+    workflow.add_edge("extract_content", "process_with_chatgpt")
     workflow.add_edge("process_with_chatgpt", "validate_result")
     workflow.add_edge("validate_result", END)
 
@@ -337,7 +480,10 @@ async def process_document(file_content: bytes, file_type_prompts: Dict[str, Any
         "page_results": [],
         "current_page": 0,
         "total_pages": 0,
-        "error": ""
+        "error": "",
+        "processing_mode": "IMAGE_OCR",
+        "verification_enabled": False,
+        "extracted_text": ""
     }
 
     final_state = await document_processor.ainvoke(state)

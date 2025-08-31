@@ -4,7 +4,7 @@ from sqlalchemy.orm import Session
 from pydantic import BaseModel
 
 from app.core.database import get_db
-from app.models import FileType
+from app.models import FileType, ProcessingMode, ProcessorType
 
 router = APIRouter()
 
@@ -12,12 +12,18 @@ class FileTypeResponse(BaseModel):
     id: int
     name: str
     description: str
+    processor_type: ProcessorType
+    processing_mode: ProcessingMode
+    verification_enabled: bool
 
 class FileTypeDetailResponse(BaseModel):
     id: int
     name: str
     description: str
     processing_prompts: dict
+    processor_type: ProcessorType
+    processing_mode: ProcessingMode
+    verification_enabled: bool
     created_at: str
     updated_at: str
 
@@ -25,11 +31,17 @@ class FileTypeCreate(BaseModel):
     name: str
     description: str
     processing_prompts: dict
+    processor_type: ProcessorType = ProcessorType.CUSTOM
+    processing_mode: ProcessingMode = ProcessingMode.IMAGE_OCR
+    verification_enabled: bool = False
 
 class FileTypeUpdate(BaseModel):
     name: str
     description: str
     processing_prompts: dict
+    processor_type: ProcessorType
+    processing_mode: ProcessingMode
+    verification_enabled: bool
 
 class PromptsUpdate(BaseModel):
     processing_prompts: dict
@@ -41,7 +53,10 @@ def get_file_types(db: Session = Depends(get_db)):
         FileTypeResponse(
             id=ft.id,
             name=ft.name,
-            description=ft.description or ""
+            description=ft.description or "",
+            processor_type=ft.processor_type,
+            processing_mode=ft.processing_mode,
+            verification_enabled=ft.verification_enabled
         )
         for ft in file_types
     ]
@@ -55,7 +70,10 @@ def create_file_type(file_type: FileTypeCreate, db: Session = Depends(get_db)):
     db_file_type = FileType(
         name=file_type.name,
         description=file_type.description,
-        processing_prompts=file_type.processing_prompts
+        processing_prompts=file_type.processing_prompts,
+        processor_type=file_type.processor_type,
+        processing_mode=file_type.processing_mode,
+        verification_enabled=file_type.verification_enabled
     )
     
     db.add(db_file_type)
@@ -65,7 +83,10 @@ def create_file_type(file_type: FileTypeCreate, db: Session = Depends(get_db)):
     return FileTypeResponse(
         id=db_file_type.id,
         name=db_file_type.name,
-        description=db_file_type.description or ""
+        description=db_file_type.description or "",
+        processor_type=db_file_type.processor_type,
+        processing_mode=db_file_type.processing_mode,
+        verification_enabled=db_file_type.verification_enabled
     )
 
 @router.get("/{file_type_id}", response_model=FileTypeDetailResponse)
@@ -79,6 +100,9 @@ def get_file_type(file_type_id: int, db: Session = Depends(get_db)):
         name=file_type.name,
         description=file_type.description or "",
         processing_prompts=file_type.processing_prompts,
+        processor_type=file_type.processor_type,
+        processing_mode=file_type.processing_mode,
+        verification_enabled=file_type.verification_enabled,
         created_at=file_type.created_at.isoformat() if file_type.created_at else "",
         updated_at=file_type.updated_at.isoformat() if file_type.updated_at else ""
     )
@@ -101,6 +125,9 @@ def update_file_type(file_type_id: int, file_type_data: FileTypeUpdate, db: Sess
     file_type.name = file_type_data.name
     file_type.description = file_type_data.description
     file_type.processing_prompts = file_type_data.processing_prompts
+    file_type.processor_type = file_type_data.processor_type
+    file_type.processing_mode = file_type_data.processing_mode
+    file_type.verification_enabled = file_type_data.verification_enabled
     
     db.commit()
     db.refresh(file_type)
@@ -110,6 +137,9 @@ def update_file_type(file_type_id: int, file_type_data: FileTypeUpdate, db: Sess
         name=file_type.name,
         description=file_type.description or "",
         processing_prompts=file_type.processing_prompts,
+        processor_type=file_type.processor_type,
+        processing_mode=file_type.processing_mode,
+        verification_enabled=file_type.verification_enabled,
         created_at=file_type.created_at.isoformat() if file_type.created_at else "",
         updated_at=file_type.updated_at.isoformat() if file_type.updated_at else ""
     )
@@ -130,6 +160,9 @@ def update_file_type_prompts(file_type_id: int, prompts_data: PromptsUpdate, db:
         name=file_type.name,
         description=file_type.description or "",
         processing_prompts=file_type.processing_prompts,
+        processor_type=file_type.processor_type,
+        processing_mode=file_type.processing_mode,
+        verification_enabled=file_type.verification_enabled,
         created_at=file_type.created_at.isoformat() if file_type.created_at else "",
         updated_at=file_type.updated_at.isoformat() if file_type.updated_at else ""
     )

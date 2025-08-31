@@ -12,10 +12,14 @@ def get_processors():
     """Lazy load processors to avoid import issues on startup"""
     from app.process_services.invoice_processor import InvoiceProcessor
     from app.process_services.huawei_processor import HuaweiProcessor
+    from app.models.enums import ProcessorType
 
     return {
-        "invoice": InvoiceProcessor(),
-        "huawei": HuaweiProcessor(),
+        ProcessorType.INVOICE: InvoiceProcessor(),
+        ProcessorType.HUAWEI_ACT: HuaweiProcessor(),
+        ProcessorType.RECEIPT: InvoiceProcessor(),  # Using InvoiceProcessor for receipts for now
+        ProcessorType.CONTRACT: InvoiceProcessor(),  # Using InvoiceProcessor for contracts for now
+        ProcessorType.CUSTOM: InvoiceProcessor(),  # Default fallback
     }
 
 @celery_app.task(bind=True)
@@ -46,13 +50,22 @@ def process_document_task(self, file_id: int, file_type_id: int, batch_id: int =
             raise Exception(f"Could not download file from FTP: {file_record.ftp_path}")
 
         processors = get_processors()
-        processor = processors.get(file_type.name.lower())
+        processor = processors.get(file_type.processor_type)
         prompts = file_type.processing_prompts
         
-        logger.info(f"File type: {file_type.name}, Processor found: {type(processor).__name__ if processor else 'None'}")
+        logger.info(f"File type: {file_type.name}, Processor type: {file_type.processor_type}, Processing mode: {file_type.processing_mode}, Verification: {file_type.verification_enabled}")
+        logger.info(f"Processor found: {type(processor).__name__ if processor else 'None'}")
 
         logger.info(f"File prompts: {prompts}")
-        result = asyncio.run(process_document(file_content, prompts))
+        
+        # Enhanced prompts with processing metadata
+        enhanced_prompts = {
+            **prompts,
+            "processing_mode": file_type.processing_mode,
+            "verification_enabled": file_type.verification_enabled
+        }
+        
+        result = asyncio.run(process_document(file_content, enhanced_prompts))
 
         if "error" in result:
             file_record.status = FileStatus.FAILED

@@ -28,6 +28,7 @@ class Settings(BaseSettings):
     host: str = "0.0.0.0"
 
     class Config:
+        extra = "allow"
         env_file = ".env"
 
     @property

@@ -9,8 +9,14 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.realpath(__file__))))
 
 from app.core.database import Base
 from app.models import *
+from app.core.config import settings
 
 config = context.config
+
+# Set the database URL from environment variables
+DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://iscan_user:iscan_password@postgres:5432/iscan_db")
+print(f"DEBUG: Using DATABASE_URL: {DATABASE_URL}")
+config.set_main_option("sqlalchemy.url", DATABASE_URL)
 
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)

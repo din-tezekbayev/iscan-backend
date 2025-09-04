@@ -2,11 +2,17 @@ import json
 import base64
 import fitz  # PyMuPDF
 import io
+import logging
+import os
+from datetime import datetime
 from typing import Dict, Any, TypedDict, List
 from langgraph.graph import StateGraph, END
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import HumanMessage, SystemMessage
 from app.core.config import settings
+
+# Set up logging
+logger = logging.getLogger(__name__)
 
 class DocumentState(TypedDict):
     file_content: bytes
@@ -59,9 +65,38 @@ def pdf_to_images(pdf_content: bytes, max_pages: int = None) -> List[str]:
         raise Exception(f"Failed to convert PDF to images: {str(e)}")
 
 
+def pdf_to_text_by_page(pdf_content: bytes) -> List[str]:
+    """
+    Extract text from PDF pages individually.
+    
+    Args:
+        pdf_content: PDF file content as bytes
+    
+    Returns:
+        List of strings containing extracted text for each page
+    """
+    try:
+        # Open PDF from bytes
+        pdf_document = fitz.open(stream=pdf_content, filetype="pdf")
+        page_texts = []
+        
+        # Extract text from each page separately
+        for page_num in range(pdf_document.page_count):
+            page = pdf_document.load_page(page_num)
+            page_text = page.get_text()
+            
+            # Add page text (even if empty, to maintain page indexing)
+            page_texts.append(page_text if page_text.strip() else "")
+        
+        pdf_document.close()
+        return page_texts
+        
+    except Exception as e:
+        raise Exception(f"Failed to extract text from PDF: {str(e)}")
+
 def pdf_to_text(pdf_content: bytes) -> str:
     """
-    Extract text from PDF pages.
+    Extract text from PDF pages (legacy function for backward compatibility).
     
     Args:
         pdf_content: PDF file content as bytes
@@ -70,19 +105,13 @@ def pdf_to_text(pdf_content: bytes) -> str:
         String containing extracted text from all pages
     """
     try:
-        # Open PDF from bytes
-        pdf_document = fitz.open(stream=pdf_content, filetype="pdf")
+        page_texts = pdf_to_text_by_page(pdf_content)
         text_content = []
         
-        # Extract text from all pages
-        for page_num in range(pdf_document.page_count):
-            page = pdf_document.load_page(page_num)
-            page_text = page.get_text()
-            
+        for page_num, page_text in enumerate(page_texts):
             if page_text.strip():  # Only add non-empty pages
                 text_content.append(f"--- Page {page_num + 1} ---\n{page_text}")
         
-        pdf_document.close()
         return "\n\n".join(text_content)
         
     except Exception as e:
@@ -252,10 +281,9 @@ def extract_content_node(state: DocumentState) -> DocumentState:
         processing_mode = state["file_type_prompts"].get("processing_mode", "IMAGE_OCR")
         
         if processing_mode == "TEXT_EXTRACTION":
-            # Extract text from PDF
-            extracted_text = pdf_to_text(state["file_content"])
-            state["extracted_text"] = extracted_text
+            # Set processing mode for page-by-page text extraction
             state["processing_mode"] = "TEXT_EXTRACTION"
+            state["extracted_text"] = ""  # Will be processed page by page
         else:
             # Default to IMAGE_OCR mode
             state["processing_mode"] = "IMAGE_OCR"
@@ -285,28 +313,78 @@ def process_with_chatgpt_node(state: DocumentState) -> DocumentState:
         processing_mode = state.get("processing_mode", "IMAGE_OCR")
 
         if processing_mode == "TEXT_EXTRACTION":
-            # Text-based processing
+            # Page-by-page text-based processing
             try:
-                extracted_text = state.get("extracted_text", "")
-                if not extracted_text:
+                page_texts = pdf_to_text_by_page(state["file_content"])
+                
+                if not page_texts:
                     raise Exception("No text extracted from PDF")
-                
-                # Create message for text processing
-                messages = [
-                    SystemMessage(content=system_prompt),
-                    HumanMessage(content=f"{extraction_prompt}\n\nDocument text:\n{extracted_text}")
-                ]
 
-                response = llm.invoke(messages)
-                result = parse_chatgpt_response(response.content)
+                state["total_pages"] = len(page_texts)
+                state["page_results"] = []
                 
-                # Add processing metadata
-                result["processing_mode"] = "TEXT_EXTRACTION"
-                result["processing_status"] = "success"
+                logger.info(f"Processing document with {len(page_texts)} pages in TEXT_EXTRACTION mode")
+
+                # Process each page separately
+                for page_idx, page_text in enumerate(page_texts):
+                    state["current_page"] = page_idx + 1
+                    
+                    logger.info(f"Processing page {page_idx + 1}/{len(page_texts)}")
+                    
+                    try:
+                        if not page_text.strip():
+                            # Skip empty pages but record them
+                            logger.info(f"Page {page_idx + 1}: Skipped (empty text)")
+                            empty_result = {
+                                "page_number": page_idx + 1,
+                                "page_processing_status": "skipped",
+                                "note": "Page contains no text"
+                            }
+                            state["page_results"].append(empty_result)
+                            continue
+                        
+                        # TODO: Remove debug saving before commit
+                        save_debug_text(page_text, page_idx + 1, "TEXT_EXTRACTION")
+                        
+                        # Create message for this page's text
+                        page_prompt = f"{extraction_prompt}\n\nPage {page_idx + 1} of {len(page_texts)}. Extract information from this specific page."
+                        messages = [
+                            SystemMessage(content=system_prompt),
+                            HumanMessage(content=f"{page_prompt}\n\nPage text:\n{page_text}")
+                        ]
+
+                        response = llm.invoke(messages)
+                        page_result = parse_chatgpt_response(response.content)
+                        
+                        # Add page metadata
+                        page_result["page_number"] = page_idx + 1
+                        page_result["page_processing_status"] = "success"
+                        
+                        state["page_results"].append(page_result)
+                        logger.info(f"Page {page_idx + 1}: Successfully processed")
+                        
+                    except Exception as e:
+                        # Log page processing error but continue with other pages
+                        logger.error(f"Page {page_idx + 1}: Failed - {str(e)}")
+                        error_result = {
+                            "page_number": page_idx + 1,
+                            "page_processing_status": "failed",
+                            "error": str(e)
+                        }
+                        state["page_results"].append(error_result)
+
+                # Aggregate results from all pages
+                successful_pages = len([p for p in state["page_results"] if p.get("page_processing_status") == "success"])
+                logger.info(f"Completed processing. Successful pages: {successful_pages}/{len(page_texts)}")
                 
-                state["processing_result"] = result
+                if state["page_results"]:
+                    state["processing_result"] = aggregate_page_results(state["page_results"])
+                    state["processing_result"]["processing_mode"] = "TEXT_EXTRACTION"
+                else:
+                    state["error"] = "No pages were successfully processed"
                 
             except Exception as e:
+                logger.error(f"Text-based processing failed: {str(e)}")
                 state["error"] = f"Text-based processing failed: {str(e)}"
                 
         else:
@@ -317,17 +395,26 @@ def process_with_chatgpt_node(state: DocumentState) -> DocumentState:
                 if not pdf_images:
                     raise Exception("No images generated from PDF")
             except Exception as e:
+                logger.error(f"PDF to image conversion failed: {str(e)}")
                 state["error"] = f"PDF to image conversion failed: {str(e)}"
                 return state
 
             state["total_pages"] = len(pdf_images)
             state["page_results"] = []
+            
+            logger.info(f"Processing document with {len(pdf_images)} pages in IMAGE_OCR mode")
 
             # Process each page
             for page_idx, image_base64 in enumerate(pdf_images):
                 state["current_page"] = page_idx + 1
                 
+                logger.info(f"Processing page {page_idx + 1}/{len(pdf_images)}")
+                
                 try:
+                    # TODO: Remove debug saving before commit - save base64 image info for debugging
+                    image_info = f"Base64 image data (length: {len(image_base64)} characters)"
+                    save_debug_text(image_info, page_idx + 1, "IMAGE_OCR")
+                    
                     # Create message content with PNG image for this page
                     page_prompt = f"{extraction_prompt}\n\nPage {page_idx + 1} of {len(pdf_images)}. Extract information from this specific page."
                     message_content = [
@@ -355,9 +442,11 @@ def process_with_chatgpt_node(state: DocumentState) -> DocumentState:
                     page_result["page_processing_status"] = "success"
                     
                     state["page_results"].append(page_result)
+                    logger.info(f"Page {page_idx + 1}: Successfully processed")
                     
                 except Exception as e:
                     # Log page processing error but continue with other pages
+                    logger.error(f"Page {page_idx + 1}: Failed - {str(e)}")
                     error_result = {
                         "page_number": page_idx + 1,
                         "page_processing_status": "failed",
@@ -366,6 +455,9 @@ def process_with_chatgpt_node(state: DocumentState) -> DocumentState:
                     state["page_results"].append(error_result)
 
             # Aggregate results from all pages
+            successful_pages = len([p for p in state["page_results"] if p.get("page_processing_status") == "success"])
+            logger.info(f"Completed processing. Successful pages: {successful_pages}/{len(pdf_images)}")
+            
             if state["page_results"]:
                 state["processing_result"] = aggregate_page_results(state["page_results"])
                 state["processing_result"]["processing_mode"] = "IMAGE_OCR"
@@ -454,6 +546,32 @@ def _is_valid_number(value) -> bool:
         return False
     except (ValueError, TypeError):
         return False
+
+# TODO: Remove debug function before commit - for debugging page-by-page processing
+def save_debug_text(page_text: str, page_number: int, processing_mode: str) -> None:
+    """Save extracted page text to debug file for troubleshooting"""
+    try:
+        # Create debug directory if it doesn't exist
+        debug_dir = "debug_texts"
+        if not os.path.exists(debug_dir):
+            os.makedirs(debug_dir)
+        
+        # Create filename with timestamp
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = f"{debug_dir}/page_{page_number}_{processing_mode}_{timestamp}.txt"
+        
+        # Write page text to file
+        with open(filename, 'w', encoding='utf-8') as f:
+            f.write(f"=== DEBUG PAGE {page_number} ({processing_mode}) ===\n")
+            f.write(f"Timestamp: {datetime.now().isoformat()}\n")
+            f.write(f"Text length: {len(page_text)} characters\n")
+            f.write("=" * 50 + "\n\n")
+            f.write(page_text)
+            
+        logger.info(f"Debug text saved to {filename}")
+        
+    except Exception as e:
+        logger.warning(f"Failed to save debug text for page {page_number}: {str(e)}")
 
 def create_document_processor():
     workflow = StateGraph(DocumentState)
